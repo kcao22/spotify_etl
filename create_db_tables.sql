@@ -25,16 +25,20 @@ CREATE TABLE IF NOT EXISTS albums (
 	album_release_date DATE
 );
 
--- Create table for tracks
 CREATE TABLE IF NOT EXISTS tracks (
-	time_track_key TEXT PRIMARY KEY,
-	track_id CHAR(22) NOT NULL,
-	artist_id CHAR(22) REFERENCES artists (artist_id),
-	album_id CHAR(22) REFERENCES albums (album_id),
+	track_id CHAR(22) PRIMARY KEY,
 	track_name TEXT,
 	track_url TEXT,
 	track_length_ms INT,
-	track_popularity SMALLINT,
+	track_popularity SMALLINT
+);
+
+-- Create table for tracks
+CREATE TABLE IF NOT EXISTS play_log (
+	time_track_key TEXT PRIMARY KEY,
+	track_id CHAR(22) REFERENCES tracks (track_id),
+	artist_id CHAR(22) REFERENCES artists (artist_id),
+	album_id CHAR(22) REFERENCES albums (album_id),
 	played_at DATE,
-	curr_date DATE
+	date_appended DATE
 );

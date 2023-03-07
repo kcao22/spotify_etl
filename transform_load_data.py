@@ -2,7 +2,6 @@ import dateutil.parser as dp
 import extract_helper_functions as ex
 import pandas as pd
 import psycopg2
-import psycopg2.extras
 import pytz
 from datetime import datetime
 from sqlalchemy import create_engine
@@ -10,16 +9,17 @@ from sqlalchemy import create_engine
 
 def create_dataframes(recent_tracks):
     '''
-    Returns artist, album, and track Pandas DataFrames.
+    Returns play log, artist, album, and track Pandas DataFrames.
     Takes JSON object of recent tracks as returned by Spotify API request and extracts track attributes from JSON object.
-    Cleans data (dates in particular) and deletes duplicates in artists and albums tables.
+    Cleans data (dates in particular) and deletes duplicates in tracks, artists, and albums tables.
 
     ARGUMENTS:
         recent_tracks: JSON object returned by API request for user's recent songs played from Spotify.
     '''
     # Instantiate list for list of lists data collection
     # Collect datetime today
-    track_fact_data = []
+    play_log_fact_data = []
+    track_dim_data = []
     artist_dim_data = []
     album_dim_data = []
     curr_date = datetime.today().date()
@@ -51,19 +51,26 @@ def create_dataframes(recent_tracks):
         token = ex.get_access_token()
         artist_followers, artist_popularity, album_popularity, album_total_tracks, album_release_date = ex.additional_info(token, artist_id=artist_id, album_id=album_id)
 
-        # Tract fact table row
-        track_fact_data.append(
+        # Play log fact table row
+        play_log_fact_data.append(
             {
                 'time_track_key': unique_id, 
+                'track_id': track_id,
+                'artist_id': artist_id,
+                'album_id': album_id,
+                'played_at': played_at, 
+                'date_appended': curr_date
+            }
+        )
+
+        # Track dim table row
+        track_dim_data.append(
+            {
                 'track_id': track_id, 
-                'artist_id': artist_id, 
-                'album_id': album_id, 
                 'track_name': track_name, 
                 'track_url': track_url, 
                 'track_length_ms': track_length_ms, 
                 'track_popularity': track_popularity, 
-                'played_at': played_at, 
-                'curr_date': curr_date
             }
         )
         
@@ -92,8 +99,11 @@ def create_dataframes(recent_tracks):
 
     # Creating DataFrames
 
-    # Track fact table
-    track_fact_table = pd.DataFrame(track_fact_data)
+    # Play log fact table 
+    play_log_fact_table = pd.DataFrame(play_log_fact_data)
+
+    # Track dim  table
+    track_dim_table = pd.DataFrame(track_dim_data)
 
     # Artist dim table
     artist_dim_table = pd.DataFrame(artist_dim_data)
@@ -103,18 +113,20 @@ def create_dataframes(recent_tracks):
     album_dim_table['album_release_date'] = album_dim_table['album_release_date'].astype('datetime64[ns]')
 
     # Delete duplicate artists and albums from most recent 50 artists / albums
-    for table in [track_fact_table, artist_dim_table, album_dim_table]:
+    for table in [track_dim_table, artist_dim_table, album_dim_table]:
         table.drop_duplicates(inplace=True)
 
-    return track_fact_table, artist_dim_table, album_dim_table
+    return play_log_fact_table, track_dim_table, artist_dim_table, album_dim_table
+    
     
 
-def load_update_tables(track_fact_table, artist_dim_table, album_dim_table, hostname, database, username, pwd, port_id):
+def load_update_tables(play_log_fact_table, track_dim_table, artist_dim_table, album_dim_table, hostname, database, username, pwd, port_id):
     '''
     Loads track, artist, and album DataFrames to specified PostgreSQL database. New data is appended to the respective tables and data is updated for non-static fields (e.g. popularity fields).
 
     ARGUMENTS:
-        track_fact_table: DataFrame of recent tracks played data.
+        play_log_fact_table: Dataframe of recent tracks played data.
+        track_dim_table: DataFrame of track data from recent tracks played.
         artist_dim_table: DataFrame of artist data from recent tracks played.
         album_dim_table: DataFrame of album data from recent tracks played.
         hostname: Host name credential for connecting to PostgreSQL.
@@ -158,14 +170,20 @@ def load_update_tables(track_fact_table, artist_dim_table, album_dim_table, host
                     'sql_injection_updates': 'album_popularity = S.album_popularity, album_total_tracks = S.album_total_tracks' 
                 }
                 track_sql = {
-                    'dataframe': track_fact_table,
+                    'dataframe': track_dim_table,
                     'data_table': 'tracks',
                     'staging_table': 'staging_tracks',
-                    'primary_key': 'time_track_key',
+                    'primary_key': 'track_id',
                     'sql_injection_updates': 'track_popularity = S.track_popularity'
                 }
+                log_sql = {
+                    'dataframe': play_log_fact_table,
+                    'data_table': 'play_log',
+                    'staging_table': 'play_log_staging',
+                    'primary_key': 'time_track_key',
+                }
                 # For each table, execute queries to update
-                for table in [artist_sql, album_sql, track_sql]:
+                for table in [artist_sql, album_sql, track_sql, log_sql]:
                     # Append new data to staging table (to_sql creates table if not exists)
                     table['dataframe'].to_sql(
                         name=table['staging_table'],
@@ -189,18 +207,21 @@ def load_update_tables(track_fact_table, artist_dim_table, album_dim_table, host
                         '''
                     )
                     # Update non-static fields
-                    cur.execute(
-                    f'''
-                        UPDATE
-                            {table['data_table']} M
-                        SET
-                            {table['sql_injection_updates']}
-                        FROM
-                            {table['staging_table']} S
-                        WHERE
-                            M.{table['primary_key']} = S.{table['primary_key']}
-                        '''
-                    )
+                    if table != log_sql:  # Log table has no dynamic fields
+                        cur.execute(
+                        f'''
+                            UPDATE
+                                {table['data_table']} M
+                            SET
+                                {table['sql_injection_updates']}
+                            FROM
+                                {table['staging_table']} S
+                            WHERE
+                                M.{table['primary_key']} = S.{table['primary_key']}
+                            '''
+                        )
+                    else:
+                        pass
                     # Truncate staging tables
                     cur.execute(
                     f'''
