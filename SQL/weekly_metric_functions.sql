@@ -147,10 +147,10 @@ $$ LANGUAGE SQL;
 
 -- Artist played with the most followers
 CREATE OR REPLACE FUNCTION artist_with_most_followers()
-RETURNS TABLE (artist TEXT, artist_followers INT)
+RETURNS TABLE (artist TEXT, artist_followers TEXT)
 AS 
 $$
-	SELECT A.artist_name, A.artist_followers
+	SELECT A.artist_name, TO_CHAR(A.artist_followers, 'FM9,999,999,999')
 	FROM 
 		play_log P
 		JOIN artists A ON 
@@ -180,7 +180,7 @@ $$ LANGUAGE SQL;
 
 -- Top 5 weekly songs by duration time
 CREATE OR REPLACE FUNCTION longest_songs()
-RETURNS TABLE (song_name TEXT, track_length_min INT)
+RETURNS TABLE (song_name TEXT, track_length_min DECIMAL)
 AS 
 $$
 	SELECT 
